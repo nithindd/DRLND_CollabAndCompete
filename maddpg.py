@@ -6,8 +6,8 @@ from ddpg import DDPGAgent
 import torch
 import numpy as np
 from utilities import soft_update, transpose_to_tensor, transpose_list
-#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-device = 'cpu'
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#device = 'cpu'
 
 class MADDPG:
     def __init__(self, episodes_before_train, batch_size, replay_buffer, discount_factor=0.95, tau=0.02):
