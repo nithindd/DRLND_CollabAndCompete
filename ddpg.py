@@ -17,7 +17,7 @@ device = 'cpu'
 TAU = 1e-3  
 
 class DDPGAgent:
-    def __init__(self, in_actor, out_actor, hidden_in_actor, hidden_out_actor, state_dim_in_critic, action_dim_inp_critic, hidden_in_critic, hidden_out_critic, lr_actor=1.0e-2, lr_critic=1.0e-2):
+    def __init__(self, in_actor, out_actor, hidden_in_actor, hidden_out_actor, state_dim_in_critic, action_dim_inp_critic, hidden_in_critic, hidden_out_critic, lr_actor=1.0e-4, lr_critic=1.0e-3):
         super(DDPGAgent, self).__init__()
 
         self.actor = Actor(in_actor, out_actor, hidden_in_actor, hidden_out_actor).to(device)
@@ -40,7 +40,6 @@ class DDPGAgent:
     def act(self, obs, noise=0.0):
         """Returns actions for given state as per current policy."""
         state = torch.from_numpy(obs).float().to(device).view(-1, 24)
-        print('ddpgstate:{}'.format(state))
         self.actor.eval()
         
         with torch.no_grad():
@@ -48,7 +47,6 @@ class DDPGAgent:
         self.actor.train()
         
         action += noise*self.noise.noise()
-        print('ddpgaction:{}'.format(action))
         return np.clip(action, -1, 1).reshape(-1)
 
     def target_act(self, obs, noise=0.0):

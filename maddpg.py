@@ -40,23 +40,16 @@ class MADDPG:
 
     def act(self, obs_all_agents, noise=0.0):
         """get actions from all agents in the MADDPG object"""
-        print('Agent act{}'.format(obs_all_agents.shape))
         actions = [agent.act(obs, noise) for agent, obs in zip(self.maddpg_agent, obs_all_agents)]
-        print('action:{}, Output:{}'.format(len(actions), np.array(actions)))
         return np.array(actions)
 
     def target_act(self, obs, noise=0.0):
         """get target network actions from all the agents in the MADDPG object """
-        #target_actions = [ddpg_agent.target_act(obs, noise) for ddpg_agent, obs in zip(self.maddpg_agent, obs_all_agents)]
         #return target_actions
-        print("obssize{}".format(obs.shape[:2]))
-        
         target_actions = torch.zeros(obs.shape[:2] + (self.action_size,), dtype=torch.float, device=device)
         for i in range(self.num_agents):
-            print('ith element:{}'.format(obs[:, i]))
             target_actions[:, i, :] = self.maddpg_agent[i].target_act(obs[:, i])
         
-        print("target_actions{}".format(target_actions.shape))
         return target_actions
 
     def update(self, samples, agent_number):
@@ -66,8 +59,7 @@ class MADDPG:
         # to flip obs[parallel_agent][agent_number] to
         # obs[agent_number][parallel_agent]
         obs, obs_full, action, reward, next_obs, next_obs_full, done = samples
-        print('Update Shapes::::obs:{},actions:{},next_states:{},obs_full:{},next_states_full:{}'.format(obs.shape,action.shape,next_obs.shape,obs_full.shape,next_obs_full.shape))
-
+        
         agent = self.maddpg_agent[agent_number]
         agent.critic_optimizer.zero_grad()
 
@@ -79,14 +71,12 @@ class MADDPG:
             q_next = agent.target_critic(next_obs_full, target_actions.view(-1, 4))
 
         y = reward[:,agent_number].view(-1, 1) + self.discount_factor * q_next * (1 - done[:, agent_number].view(-1, 1))
-        #action = torch.cat(action, dim=1)
-        #critic_input = torch.cat((obs_full.t(), action), dim=1).to(device)
         q = agent.critic(obs_full, action.view(-1, 4))
 
         huber_loss = torch.nn.SmoothL1Loss()
         critic_loss = huber_loss(q, y.detach())
         critic_loss.backward()
-        #torch.nn.utils.clip_grad_norm_(agent.critic.parameters(), 0.5)
+        torch.nn.utils.clip_grad_norm_(agent.critic.parameters(), 0.5)
         agent.critic_optimizer.step()
 
         #update actor network using policy gradient
@@ -94,29 +84,20 @@ class MADDPG:
         # make input to agent
         # detach the other agents to save computation
         # saves some time for computing derivative
-        #q_input = [ self.maddpg_agent[i].actor(ob) if i == agent_number \
-        #           else self.maddpg_agent[i].actor(ob).detach()
-        #           for i, ob in enumerate(obs) ]
         
         agent_obs = obs[:, agent_number]
         agent_actions = agent.actor(agent_obs)
         q_input = action.clone()
         q_input[:, agent_number] = agent_actions
 
-        #q_input = torch.cat(q_input, dim=1)
-        # combine all the actions and observations for input to critic
-        # many of the obs are redundant, and obs[1] contains all useful information already
-        #q_input2 = torch.cat((obs_full.t(), q_input), dim=1)
-
         # get the policy gradient
         actor_loss = -agent.critic(obs_full, q_input.view(-1, 4)).mean()
         actor_loss.backward()
-        #torch.nn.utils.clip_grad_norm_(agent.actor.parameters(),0.5)
+        torch.nn.utils.clip_grad_norm_(agent.actor.parameters(),0.5)
         agent.actor_optimizer.step()
 
         al = actor_loss.cpu().detach().item()
         cl = critic_loss.cpu().detach().item()
-        print('agent{} losses, critic loss:{} ,actor_loss:{}'.format(agent_number, cl, al))
         
         return al, cl
     
@@ -148,7 +129,6 @@ class MADDPG:
         obs_full = obs.reshape(-1)
         next_states_full = next_states.reshape(-1)
         
-        print('i_episode:{},obs:{},actions:{},next_states:{},obs_full:{},next_states_full:{}'.format(i_episode,obs.shape,actions.shape,next_states.shape,obs_full.shape,next_states_full.shape))
         self.buffer.add(obs=obs, obs_full=obs_full, action=actions, reward=rewards,
                         next_state=next_states, next_state_full=next_states_full, done=dones)
 
@@ -159,6 +139,5 @@ class MADDPG:
 
             for agent_i in range(self.num_agents):
                 samples = self.buffer.sample(self.batch_size)
-                print('samples size:{}'.format(len(samples)))
                 self.update(self.to_tensor(samples), agent_i)
             self.update_targets()

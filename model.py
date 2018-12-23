@@ -51,7 +51,6 @@ class Critic(nn.Module):
         x = self.bn1(state)
         h1 = self.nonlin(self.fc1(x))
         x = torch.cat((h1, action), dim=1)
-        print('Critic:{}'.format(x.shape))
         h2 = self.nonlin(self.fc2(x))
         h3 = (self.fc3(h2))
       
