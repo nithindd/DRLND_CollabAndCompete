@@ -4,21 +4,29 @@
 
 from ddpg import DDPGAgent
 import torch
+import numpy as np
 from utilities import soft_update, transpose_to_tensor, transpose_list
 #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 device = 'cpu'
 
 class MADDPG:
-    def __init__(self, discount_factor=0.95, tau=0.02):
+    def __init__(self, episodes_before_train, batch_size, replay_buffer, discount_factor=0.95, tau=0.02):
         super(MADDPG, self).__init__()
 
-        # critic input = obs_full + actions = 14+2+2+2=20
-        self.maddpg_agent = [DDPGAgent(14, 16, 8, 2, 20, 32, 16),
-                             DDPGAgent(14, 16, 8, 2, 20, 32, 16)]
+        # critic input = obs_full + actions = 24+24+2+2=52
+        self.maddpg_agent = [DDPGAgent(24, 2, 400, 300, 48, 4, 400, 300),
+                             DDPGAgent(24, 2, 400, 300, 48, 4, 400, 300)]
 
+        
+        self.num_agents = 2
+        self.action_size = 2
         self.discount_factor = discount_factor
         self.tau = tau
         self.iter = 0
+        self.episodes_before_train = episodes_before_train
+        self.batch_size = batch_size
+        self.buffer =  replay_buffer
+        
 
     def get_actors(self):
         """get actors of all the agents in the MADDPG object"""
@@ -32,12 +40,23 @@ class MADDPG:
 
     def act(self, obs_all_agents, noise=0.0):
         """get actions from all agents in the MADDPG object"""
+        print('Agent act{}'.format(obs_all_agents.shape))
         actions = [agent.act(obs, noise) for agent, obs in zip(self.maddpg_agent, obs_all_agents)]
-        return actions
+        print('action:{}, Output:{}'.format(len(actions), np.array(actions)))
+        return np.array(actions)
 
-    def target_act(self, obs_all_agents, noise=0.0):
+    def target_act(self, obs, noise=0.0):
         """get target network actions from all the agents in the MADDPG object """
-        target_actions = [ddpg_agent.target_act(obs, noise) for ddpg_agent, obs in zip(self.maddpg_agent, obs_all_agents)]
+        #target_actions = [ddpg_agent.target_act(obs, noise) for ddpg_agent, obs in zip(self.maddpg_agent, obs_all_agents)]
+        #return target_actions
+        print("obssize{}".format(obs.shape[:2]))
+        
+        target_actions = torch.zeros(obs.shape[:2] + (self.action_size,), dtype=torch.float, device=device)
+        for i in range(self.num_agents):
+            print('ith element:{}'.format(obs[:, i]))
+            target_actions[:, i, :] = self.maddpg_agent[i].target_act(obs[:, i])
+        
+        print("target_actions{}".format(target_actions.shape))
         return target_actions
 
     def update(self, samples, agent_number):
@@ -46,10 +65,8 @@ class MADDPG:
         # need to transpose each element of the samples
         # to flip obs[parallel_agent][agent_number] to
         # obs[agent_number][parallel_agent]
-        obs, obs_full, action, reward, next_obs, next_obs_full, done = map(transpose_to_tensor, samples)
-
-        obs_full = torch.stack(obs_full)
-        next_obs_full = torch.stack(next_obs_full)
+        obs, obs_full, action, reward, next_obs, next_obs_full, done = samples
+        print('Update Shapes::::obs:{},actions:{},next_states:{},obs_full:{},next_states_full:{}'.format(obs.shape,action.shape,next_obs.shape,obs_full.shape,next_obs_full.shape))
 
         agent = self.maddpg_agent[agent_number]
         agent.critic_optimizer.zero_grad()
@@ -57,17 +74,14 @@ class MADDPG:
         #critic loss = batch mean of (y- Q(s,a) from target network)^2
         #y = reward of this timestep + discount * Q(st+1,at+1) from target network
         target_actions = self.target_act(next_obs)
-        target_actions = torch.cat(target_actions, dim=1)
-
-        target_critic_input = torch.cat((next_obs_full.t(),target_actions), dim=1).to(device)
-
+        
         with torch.no_grad():
-            q_next = agent.target_critic(target_critic_input)
+            q_next = agent.target_critic(next_obs_full, target_actions.view(-1, 4))
 
-        y = reward[agent_number].view(-1, 1) + self.discount_factor * q_next * (1 - done[agent_number].view(-1, 1))
-        action = torch.cat(action, dim=1)
-        critic_input = torch.cat((obs_full.t(), action), dim=1).to(device)
-        q = agent.critic(critic_input)
+        y = reward[:,agent_number].view(-1, 1) + self.discount_factor * q_next * (1 - done[:, agent_number].view(-1, 1))
+        #action = torch.cat(action, dim=1)
+        #critic_input = torch.cat((obs_full.t(), action), dim=1).to(device)
+        q = agent.critic(obs_full, action.view(-1, 4))
 
         huber_loss = torch.nn.SmoothL1Loss()
         critic_loss = huber_loss(q, y.detach())
@@ -80,17 +94,22 @@ class MADDPG:
         # make input to agent
         # detach the other agents to save computation
         # saves some time for computing derivative
-        q_input = [ self.maddpg_agent[i].actor(ob) if i == agent_number \
-                   else self.maddpg_agent[i].actor(ob).detach()
-                   for i, ob in enumerate(obs) ]
+        #q_input = [ self.maddpg_agent[i].actor(ob) if i == agent_number \
+        #           else self.maddpg_agent[i].actor(ob).detach()
+        #           for i, ob in enumerate(obs) ]
+        
+        agent_obs = obs[:, agent_number]
+        agent_actions = agent.actor(agent_obs)
+        q_input = action.clone()
+        q_input[:, agent_number] = agent_actions
 
-        q_input = torch.cat(q_input, dim=1)
+        #q_input = torch.cat(q_input, dim=1)
         # combine all the actions and observations for input to critic
         # many of the obs are redundant, and obs[1] contains all useful information already
-        q_input2 = torch.cat((obs_full.t(), q_input), dim=1)
+        #q_input2 = torch.cat((obs_full.t(), q_input), dim=1)
 
         # get the policy gradient
-        actor_loss = -agent.critic(q_input2).mean()
+        actor_loss = -agent.critic(obs_full, q_input.view(-1, 4)).mean()
         actor_loss.backward()
         #torch.nn.utils.clip_grad_norm_(agent.actor.parameters(),0.5)
         agent.actor_optimizer.step()
@@ -98,10 +117,48 @@ class MADDPG:
         al = actor_loss.cpu().detach().item()
         cl = critic_loss.cpu().detach().item()
         print('agent{} losses, critic loss:{} ,actor_loss:{}'.format(agent_number, cl, al))
-
+        
+        return al, cl
+    
     def update_targets(self):
         """soft update targets"""
         self.iter += 1
         for ddpg_agent in self.maddpg_agent:
             soft_update(ddpg_agent.target_actor, ddpg_agent.actor, self.tau)
             soft_update(ddpg_agent.target_critic, ddpg_agent.critic, self.tau)
+    
+    def reset(self):
+        for ddpg_agent in self.maddpg_agent:
+            ddpg_agent.reset()          
+    
+    def to_tensor(self, samples):
+        obs, obs_full, actions, rewards, next_states, next_states_full, dones = samples
+
+        obs = torch.from_numpy(obs).float().to(device)
+        obs_full = torch.from_numpy(obs_full).float().to(device)
+        actions = torch.from_numpy(actions).float().to(device)
+        rewards = torch.from_numpy(rewards).float().to(device)
+        next_states = torch.from_numpy(next_states).float().to(device)
+        next_states_full = torch.from_numpy(next_states_full).float().to(device)
+        dones = torch.from_numpy(dones.astype(np.uint8)).float().to(device)
+
+        return obs, obs_full, actions, rewards, next_states, next_states_full, dones
+    
+    def step(self, i_episode, obs, actions, rewards, next_states, dones):
+        obs_full = obs.reshape(-1)
+        next_states_full = next_states.reshape(-1)
+        
+        print('i_episode:{},obs:{},actions:{},next_states:{},obs_full:{},next_states_full:{}'.format(i_episode,obs.shape,actions.shape,next_states.shape,obs_full.shape,next_states_full.shape))
+        self.buffer.add(obs=obs, obs_full=obs_full, action=actions, reward=rewards,
+                        next_state=next_states, next_state_full=next_states_full, done=dones)
+
+        self.i_episode = i_episode
+        if (i_episode >= self.episodes_before_train) and (self.buffer.size() >= self.batch_size):
+            if (self.i_episode == self.episodes_before_train) and np.any(dones):
+                print("\nStart training...")
+
+            for agent_i in range(self.num_agents):
+                samples = self.buffer.sample(self.batch_size)
+                print('samples size:{}'.format(len(samples)))
+                self.update(self.to_tensor(samples), agent_i)
+            self.update_targets()

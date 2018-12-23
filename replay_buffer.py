@@ -1,31 +1,44 @@
-from collections import deque
+from collections import namedtuple, deque
 import random
-from utilities import transpose_list
+import numpy as np
 
 
 class ReplayBuffer:
-    def __init__(self,size):
-        self.size = size
-        self.deque = deque(maxlen=self.size)
-
-    def push(self,transition):
-        """push into the buffer"""
+    def __init__(self, buffer_size, seed):
+        """Initialize a ReplayBuffer object.
+        Params
+        ======
+            buffer_size (int): maximum size of buffer
+        """
+        random.seed(seed)
+        self.memory = deque(maxlen=buffer_size)  # internal memory (deque)
+        self.experience = namedtuple(
+            "Experience",
+            field_names=["obs", "obs_full", "action", "reward", "next_state", "next_state_full", "done"])
         
-        input_to_buffer = transpose_list(transition)
-    
-        for item in input_to_buffer:
-            self.deque.append(item)
+    def add(self, obs, obs_full, action, reward, next_state, next_state_full, done):
+        """Add a new experience to memory."""
 
-    def sample(self, batchsize):
-        """sample from the buffer"""
-        samples = random.sample(self.deque, batchsize)
+        e = self.experience(obs, obs_full, action, reward, next_state, next_state_full, done)
+        self.memory.append(e)
 
-        # transpose list of list
-        return transpose_list(samples)
+    def sample(self, n):
+        """Randomly sample a batch of experiences from memory."""
+        experiences = random.sample(self.memory, k=n)
+
+        obs = np.array([e.obs for e in experiences if e is not None])
+        obs_full = np.array([e.obs_full for e in experiences if e is not None])
+        actions = np.array([e.action for e in experiences if e is not None])
+        rewards = np.array([e.reward for e in experiences if e is not None])
+        next_state = np.array([e.next_state for e in experiences if e is not None])
+        next_state_full = np.array([e.next_state_full for e in experiences if e is not None])
+        dones = np.array([e.done for e in experiences if e is not None])
+
+        return obs, obs_full, actions, rewards, next_state, next_state_full, dones
 
     def __len__(self):
-        return len(self.deque)
+        """Return the current size of internal memory."""
+        return len(self.memory)
 
-
-
-        
+    def size(self):
+        return len(self.memory)
