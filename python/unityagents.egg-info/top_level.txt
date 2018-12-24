@@ -1,4 +1,0 @@
-communicator_objects
-tests
-unityagents
-unitytrainers
