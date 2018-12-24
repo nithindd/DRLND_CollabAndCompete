@@ -45,8 +45,9 @@ class DDPGAgent:
         with torch.no_grad():
             action = self.actor(state).cpu().data.numpy()
         self.actor.train()
+        add_noise = noise * self.noise.noise()
+        action += add_noise.cpu().data.numpy()
         
-        action += noise*self.noise.noise()
         return np.clip(action, -1, 1).reshape(-1)
 
     def target_act(self, obs, noise=0.0):
